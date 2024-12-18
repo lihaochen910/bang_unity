@@ -1,4 +1,5 @@
-﻿using Bang.Components;
+﻿using System;
+using Bang.Components;
 using System.Diagnostics;
 
 namespace Bang.Systems

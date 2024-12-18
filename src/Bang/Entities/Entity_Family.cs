@@ -1,4 +1,6 @@
-﻿using Bang.Components;
+﻿using System;
+using System.Collections.Generic;
+using Bang.Components;
 using System.Collections.Immutable;
 using System.Diagnostics;
 
@@ -319,10 +321,10 @@ namespace Bang.Entities
             }
 
             _parent.OnEntityDestroyed += Destroy;
-
+            
             _parent.OnEntityActivated += ActivateFromParent;
             _parent.OnEntityDeactivated += DeactivateFromParent;
-
+            
             _parent.AddChild(EntityId);
         }
 
@@ -345,10 +347,10 @@ namespace Bang.Entities
             }
 
             _parent.OnEntityDestroyed -= Destroy;
-
+            
             _parent.OnEntityActivated -= OnEntityActivated;
             _parent.OnEntityDeactivated -= OnEntityDeactivated;
-
+            
             _parent.RemoveChild(EntityId);
 
             _parent = null;

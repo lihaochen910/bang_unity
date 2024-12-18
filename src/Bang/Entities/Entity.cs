@@ -1,9 +1,12 @@
 ﻿using Bang.Components;
 using Bang.StateMachines;
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+
 
 namespace Bang.Entities
 {
@@ -17,6 +20,8 @@ namespace Bang.Entities
         /// Fired whenever a new component is added.
         /// </summary>
         public event Action<Entity, int>? OnComponentAdded;
+        
+        public event Action<Entity, int, bool>? OnComponentBeforeRemoving;
 
         /// <summary>
         /// Fired whenever a new component is removed.
@@ -24,6 +29,8 @@ namespace Bang.Entities
         /// whether this was caused by a destroy.
         /// </summary>
         public event Action<Entity, int, bool>? OnComponentRemoved;
+        
+        public event Action<Entity, int>? OnComponentBeforeModifying;
 
         /// <summary>
         /// Fired whenever any component is replaced.
@@ -46,7 +53,7 @@ namespace Bang.Entities
         /// from its context listeners.
         /// </summary>
         public event Action<Entity>? OnEntityDeactivated;
-
+        
         /// <summary>
         /// Notifies listeners when a particular component has been modified.
         /// </summary>
@@ -61,6 +68,8 @@ namespace Bang.Entities
         /// Entity unique identifier.
         /// </summary>
         public int EntityId { get; }
+
+        public World World => _world;
 
         /// <summary>
         /// Components lookup. Unique per world that the entity was created.
@@ -94,7 +103,8 @@ namespace Bang.Entities
         /// Keeps track of all the components that are currently present.
         /// </summary>
         // TODO: Investigate trade-off between using this and a hash set.
-        private bool[] _availableComponents;
+        // private bool[] _availableComponents;
+        private IDictionary<int, bool> _availableComponents;
 
         // TODO: I guess this can be an array. Eventually.
         private IDictionary<int, IComponent> _components;
@@ -104,11 +114,11 @@ namespace Bang.Entities
         /// TODO: Optimize this. For now, this is okay since it's only used once the entity is serialized.
         /// </summary>
         public ImmutableArray<IComponent> Components => _components
-            .Where(kv => _availableComponents[kv.Key]).Select(kv => kv.Value).ToImmutableArray();
+            .Where(kv => _availableComponents.ContainsKey(kv.Key) && _availableComponents[kv.Key]).Select(kv => kv.Value).ToImmutableArray();
 
         // TODO: Optimize this. For now, this is okay since it's only used once the entity is initialized.
         internal ImmutableArray<int> ComponentsIndices => _components
-            .Where(kv => _availableComponents[kv.Key]).Select(kv => kv.Key).ToImmutableArray();
+            .Where(kv => _availableComponents.ContainsKey(kv.Key) && _availableComponents[kv.Key]).Select(kv => kv.Key).ToImmutableArray();
 
         internal Entity(World world, int id, IComponent[] components)
         {
@@ -117,7 +127,8 @@ namespace Bang.Entities
             _world = world;
             _lookup = world.ComponentsLookup;
 
-            _availableComponents = new bool[_lookup.TotalIndices];
+            // _availableComponents = new bool[_lookup.TotalIndices];
+            _availableComponents = new Dictionary<int, bool>();
 
             InitializeComponents(components);
         }
@@ -125,7 +136,9 @@ namespace Bang.Entities
         /// <summary>
         /// Set an entity so it belongs to the world.
         /// </summary>
+#if NET6_0_OR_GREATER
         [MemberNotNull(nameof(_components))]
+#endif
         internal void InitializeComponents(IComponent[] components)
         {
             _components = new Dictionary<int, IComponent>();
@@ -142,18 +155,19 @@ namespace Bang.Entities
                 AddComponentInternal(c, key);
             }
 
-            if (World.DIAGNOSTICS_MODE)
-            {
-                CheckForRequiredComponents();
-            }
+            // if (World.DIAGNOSTICS_MODE)
+            // {
+            //     CheckForRequiredComponents();
+            // }
         }
 
         /// <summary>
         /// This will check whether the entity has all the required components when set to the world.
         /// </summary>
+        [Conditional("DEBUG")]
         private void CheckForRequiredComponents()
         {
-            Dictionary<int, Type> components = _components.Where(kv => _availableComponents[kv.Key])
+            Dictionary<int, Type> components = _components.Where(kv => _availableComponents.ContainsKey(kv.Key) && _availableComponents[kv.Key])
                 .ToDictionary(kv => kv.Key, kv => kv.Value.GetType());
 
             foreach ((int _, Type t) in components)
@@ -248,6 +262,16 @@ namespace Bang.Entities
             return TryGetComponent(index, out IComponent? value) ? (T)value : null;
         }
 
+        public IComponent? TryGetComponent(Type t)
+        {
+            if (HasComponent(t))
+            {
+                return GetComponent(t);
+            }
+
+            return null;
+        }
+
         private bool TryGetComponent(int index, [NotNullWhen(true)] out IComponent? component)
         {
             if (HasComponent(index))
@@ -259,7 +283,7 @@ namespace Bang.Entities
             component = default;
             return false;
         }
-
+        
         /// <summary>
         /// Fetch a component of type T. If the entity does not have that component, this method will assert and fail.
         /// </summary>
@@ -279,6 +303,19 @@ namespace Bang.Entities
         {
             Debug.Assert(HasComponent(index), $"The entity doesn't have a component of type '{typeof(T).Name}', maybe you should 'TryGetComponent'?");
             return (T)_components[index];
+        }
+
+        public IComponent GetComponent(Type t)
+        {
+            int index = GetComponentIndex(t);
+            Debug.Assert(HasComponent(index), $"The entity doesn't have a component of type '{t.Name}', maybe you should 'TryGetComponent'?");
+            return _components[index];
+        }
+
+        public IComponent GetComponentByIndex(int index)
+        {
+            Debug.Assert(HasComponent(index), $"The entity doesn't have a component of index '{index}', maybe you should 'TryGetComponent'?");
+            return _components[index];
         }
 
         /// <summary>
@@ -428,16 +465,17 @@ namespace Bang.Entities
         /// <summary>
         /// Checks whether an entity has a component.
         /// </summary>
-        public bool HasComponent(int index) => index < _availableComponents.Length && _availableComponents[index];
+        // public bool HasComponent(int index) => index < _availableComponents.Length && _availableComponents[index];
+        public bool HasComponent(int index) => _availableComponents.ContainsKey(index) && _availableComponents[index];
 
         /// <summary>
         /// Checks whether an entity has a data attached to -- component or message.
         /// </summary>
         internal bool HasComponentOrMessage(int index) => HasComponent(index) || HasMessage(index);
 
-        private int GetComponentIndex<T>() => GetComponentIndex(typeof(T));
+        public int GetComponentIndex<T>() => GetComponentIndex(typeof(T));
 
-        private int GetComponentIndex(Type t)
+        public int GetComponentIndex(Type t)
         {
             Debug.Assert(_lookup is not null, "Why are we modifying an entity without setting it to the world?");
             return _lookup.Id(t);
@@ -449,18 +487,19 @@ namespace Bang.Entities
         /// </summary>
         private void AddComponentInternal<T>(T c, int index) where T : IComponent
         {
-            if (_availableComponents.Length <= index)
-            {
-                // We might hit the scenario when a component that was not previously taken into account is added.
-                // This may happen for components not tracked by a generator, usually when there is a project that
-                // adds extra components. This shouldn't happen in the shipped engine, for example.
-
-                // Double the lookup size.
-                bool[] newLookup = new bool[_availableComponents.Length * 2];
-                Array.Copy(_availableComponents, newLookup, _availableComponents.Length);
-
-                _availableComponents = newLookup;
-            }
+            // if _availableComponents is bool array
+            // if (_availableComponents.Length <= index)
+            // {
+            //     // We might hit the scenario when a component that was not previously taken into account is added.
+            //     // This may happen for components not tracked by a generator, usually when there is a project that
+            //     // adds extra components. This shouldn't happen in the shipped engine, for example.
+            //
+            //     // Double the lookup size.
+            //     bool[] newLookup = new bool[_availableComponents.Length * 2];
+            //     Array.Copy(_availableComponents, newLookup, _availableComponents.Length);
+            //
+            //     _availableComponents = newLookup;
+            // }
 
             _components[index] = c;
             _availableComponents[index] = true;
@@ -520,7 +559,8 @@ namespace Bang.Entities
             {
                 modifiableComponent.Unsubscribe(action);
             }
-
+            
+            OnComponentBeforeModifying?.Invoke(this, index);
             _components[index] = c;
 
             if (_parent is not null && c is IParentRelativeComponent relative && !relative.HasParent &&
@@ -553,14 +593,16 @@ namespace Bang.Entities
             {
                 modifiableComponent.Unsubscribe(action);
             }
-
-            _components[index] = default!;
-            _availableComponents[index] = false;
-
+            
             // Check whether this removal will cause the entity to be destroyed.
             // If no components are left, there is no use for this to exist.
             bool destroyAfterRemove = _components.Count == 0 && !IsDestroyed;
 
+            OnComponentBeforeRemoving?.Invoke(this, index, destroyAfterRemove);
+
+            _components[index] = default!;
+            _availableComponents[index] = false;
+            
             OnComponentRemoved?.Invoke(this, index, destroyAfterRemove /* causedByDestroy */);
             _parent?.UntrackComponent(index, OnParentModified);
 
@@ -638,6 +680,12 @@ namespace Bang.Entities
             }
 
             action = () => OnComponentModified?.Invoke(this, index);
+            // action = () =>
+            // {
+            //     foreach ( Action< Entity , int > callback in OnComponentModified ) {
+            //         callback?.Invoke(this, index);
+            //     }
+            // };
             _modifiableComponentsCallback.Add(index, action);
 
             return action;
@@ -663,10 +711,18 @@ namespace Bang.Entities
         /// </summary>
         public void Destroy()
         {
+            #if NETSTANDARD
+            var keys = _components.Keys.ToArray();
+            foreach (var index in keys)
+            {
+                NotifyRemovalOnDestroy(index);
+            }
+            #else
             foreach (int index in _components.Keys)
             {
                 NotifyRemovalOnDestroy(index);
             }
+            #endif
 
             IsDestroyed = true;
 
@@ -769,20 +825,41 @@ namespace Bang.Entities
         {
             Unparent();
 
+            #if NETSTANDARD
+            var keys = _components.Keys.ToArray();
+            foreach (var index in keys)
+            {
+                RemoveComponent(index);
+            }
+            #else
             foreach (var (index, _) in _components)
             {
                 RemoveComponent(index);
             }
+            #endif
 
             OnComponentAdded = null;
             OnComponentModified = null;
+            OnComponentBeforeModifying = null;
             OnComponentRemoved = null;
-
+            OnComponentBeforeRemoving = null;
+            
             OnEntityDestroyed = null;
             OnEntityActivated = null;
             OnEntityDeactivated = null;
-
+            
             OnMessage = null;
+            // OnComponentAdded = ImmutableArray< Action< Entity , int > >.Empty;
+            // OnComponentModified = ImmutableArray< Action< Entity , int > >.Empty;
+            // OnComponentBeforeModifying = ImmutableArray< Action< Entity , int > >.Empty;
+            // OnComponentRemoved = ImmutableArray< Action< Entity , int, bool > >.Empty;
+            // OnComponentBeforeRemoving = ImmutableArray< Action< Entity , int, bool > >.Empty;
+            //
+            // OnEntityDestroyed = ImmutableArray< Action< int > >.Empty;
+            // OnEntityActivated = ImmutableArray< Action< Entity > >.Empty;
+            // OnEntityDeactivated = ImmutableArray< Action< Entity > >.Empty;
+            //
+            // OnMessage = ImmutableArray< Action< Entity , int, IMessage > >.Empty;
 
             _trackedComponentsModified.Clear();
             _modifiableComponentsCallback.Clear();
@@ -828,6 +905,9 @@ namespace Bang.Entities
             _world.ActivateEntity(EntityId);
 
             OnEntityActivated?.Invoke(this);
+            // foreach ( Action< Entity > action in OnEntityActivated ) {
+            //     action?.Invoke(this);
+            // }
         }
 
         private void DeactivateFromParent(Entity _)
@@ -856,6 +936,9 @@ namespace Bang.Entities
             _world.DeactivateEntity(EntityId);
 
             OnEntityDeactivated?.Invoke(this);
+            // foreach ( Action< Entity > action in OnEntityDeactivated ) {
+            //     action?.Invoke(this);
+            // }
         }
 
         /// <summary>
@@ -874,12 +957,20 @@ namespace Bang.Entities
                 // Redundant operation, just do a no-operation.
                 return false;
             }
+            
+            OnComponentBeforeRemoving?.Invoke(this, index, true /* causedByDestroyed */);
+            // foreach ( Action< Entity , int, bool > action in OnComponentBeforeRemoving ) {
+            //     action?.Invoke(this, index, true /* causedByDestroyed */);
+            // }
 
             // Right now, I can't think of any other notifications that need to be notified as soon as 
             // the entity gets destroyed.
             // The rest of cleanup should be dealt with in the actual Dispose(), called by World at the
             // end of the frame.
             OnComponentRemoved?.Invoke(this, index, true /* causedByDestroyed */);
+            // foreach ( Action< Entity , int, bool > action in OnComponentRemoved ) {
+            //     action?.Invoke(this, index, true /* causedByDestroyed */);
+            // }
 
             return true;
         }

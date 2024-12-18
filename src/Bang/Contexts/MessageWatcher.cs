@@ -1,4 +1,6 @@
-﻿using Bang.Components;
+﻿using System;
+using System.Collections.Generic;
+using Bang.Components;
 using Bang.Entities;
 using Bang.Util;
 using System.Collections.Immutable;
@@ -26,7 +28,7 @@ namespace Bang.Contexts
         {
             World = world;
 
-            List<int> builder = [];
+            List<int> builder = new List<int>();
             foreach (Type t in targetMessages)
             {
                 Debug.Assert(typeof(IMessage).IsAssignableFrom(t));
@@ -35,7 +37,7 @@ namespace Bang.Contexts
                 builder.Add(id);
             }
 
-            _targetMessages = [.. builder];
+            _targetMessages = builder.ToImmutableHashSet();
 
             // Calculate the hash based on the target messages and the context id.
             int messagesHash = HashExtensions.GetHashCodeImpl(builder);

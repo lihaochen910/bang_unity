@@ -1,9 +1,14 @@
-﻿using Bang.Components;
+﻿using System;
+using System.Collections.Generic;
+using Bang.Components;
 using Bang.Entities;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Reflection;
+#if NET6_0_OR_GREATER
 using System.Text.Json.Serialization;
+#endif
 
 namespace Bang.StateMachines
 {
@@ -36,7 +41,9 @@ namespace Bang.StateMachines
         /// <summary>
         /// Name of the active state. Used for debug.
         /// </summary>
+#if NET6_0_OR_GREATER
         [JsonIgnore]
+#endif
         public string Name { get; private set; } = string.Empty;
 
         /// <summary>
@@ -106,8 +113,10 @@ namespace Bang.StateMachines
         /// Initialize the state machine. 
         /// Should only be called by the entity itself when it is registered in the world.
         /// </summary>
+#if NET6_0_OR_GREATER
         [MemberNotNull(nameof(World))]
         [MemberNotNull(nameof(Entity))]
+#endif
         internal virtual void Initialize(World world, Entity e)
         {
             Debug.Assert(Routine is not null, "Have you called State() before starting this state machine?");
@@ -130,15 +139,6 @@ namespace Bang.StateMachines
         /// Initialize the state machine. Called before the first <see cref="Tick(float)"/> call.
         /// </summary>
         protected virtual void OnStart() { }
-
-        /// <summary>
-        /// Initialize the state machine prior to any ticks.
-        /// </summary>
-        internal void Start()
-        {
-            OnStart();
-            _isFirstTick = false;
-        }
 
         /// <summary>
         /// Tick an update.
@@ -215,6 +215,7 @@ namespace Bang.StateMachines
                     {
                         _waitForMessageTarget = r.Target;
                         target.OnMessage += OnMessageSent;
+                        // target.OnMessage = target.OnMessage.Add( OnMessageSent );
                     }
                     else
                     {
@@ -245,7 +246,8 @@ namespace Bang.StateMachines
 
             if (_isFirstTick)
             {
-                Start();
+                OnStart();
+                _isFirstTick = false;
             }
 
             try
@@ -309,6 +311,7 @@ namespace Bang.StateMachines
         public virtual void OnDestroyed()
         {
             Entity.OnMessage -= OnMessageSent;
+            // Entity.OnMessage = Entity.OnMessage.Remove( OnMessageSent );
 
             Routine?.Dispose();
 
@@ -418,6 +421,7 @@ namespace Bang.StateMachines
             if (_waitForMessageTarget is not null)
             {
                 _waitForMessageTarget.OnMessage -= OnMessageSent;
+                // _waitForMessageTarget.OnMessage = _waitForMessageTarget.OnMessage.Remove( OnMessageSent );
                 _waitForMessageTarget = null;
             }
         }

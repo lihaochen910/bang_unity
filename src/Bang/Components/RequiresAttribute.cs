@@ -1,4 +1,7 @@
-﻿namespace Bang.Components
+﻿using System;
+
+
+namespace Bang.Components
 {
     /// <summary>
     /// Marks a component as requiring other components when being added to an entity.

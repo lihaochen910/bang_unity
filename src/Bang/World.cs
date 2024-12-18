@@ -4,8 +4,12 @@ using Bang.Diagnostics;
 using Bang.Entities;
 using Bang.Systems;
 using Bang.Util;
+using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Linq;
+
 
 namespace Bang
 {
@@ -21,19 +25,20 @@ namespace Bang
         /// </summary>
         public static bool DIAGNOSTICS_MODE = true;
 
-        private record struct SystemInfo
+        // private record struct SystemInfo
+        private record SystemInfo
         {
-            public readonly int ContextId { get; init; }
+            public int ContextId { get; init; }
 
-            public readonly int[] Watchers { get; init; }
+            public int[] Watchers { get; init; }
 
-            public readonly int? Messager { get; init; }
+            public int? Messager { get; init; }
 
             /// <summary>
             /// Executing order of the system.
             /// Unique within the world.
             /// </summary>
-            public readonly int Order { get; init; }
+            public int Order { get; init; }
 
             public bool IsActive;
         }
@@ -53,11 +58,13 @@ namespace Bang
         /// The startup systems will be called the first time they are activated.
         /// We will keep the systems here even after they were deactivated.
         /// </summary>
-        private readonly SortedList<int, (IStartupSystem System, int ContextId)> _cachedStartupSystems;
-        private readonly SortedList<int, (IExitSystem System, int ContextId)> _cachedExitSystems;
+        protected readonly SortedList<int, (IEarlyStartupSystem System, int ContextId)> _cachedEarlyStartupSystems;
+        protected readonly SortedList<int, (IStartupSystem System, int ContextId)> _cachedStartupSystems;
+        protected readonly SortedList<int, (IExitSystem System, int ContextId)> _cachedExitSystems;
 
-        private readonly SortedList<int, (IFixedUpdateSystem System, int ContextId)> _cachedFixedExecuteSystems;
-        private readonly SortedList<int, (IUpdateSystem System, int ContextId)> _cachedExecuteSystems;
+        protected readonly SortedList<int, (IFixedUpdateSystem System, int ContextId)> _cachedFixedExecuteSystems;
+        protected readonly SortedList<int, (IUpdateSystem System, int ContextId)> _cachedExecuteSystems;
+        protected readonly SortedList<int, (ILateUpdateSystem System, int ContextId)> _cachedLateExecuteSystems;
 
         /// <summary>
         /// This must be called by engine implementations of Bang to handle with rendering.
@@ -126,7 +133,7 @@ namespace Bang
         /// We track this here rather than <see cref="_cachedStartupSystems"/> if a startup system
         /// happen to be deactivated.
         /// </summary>
-        private readonly HashSet<int> _systemsInitialized = new();
+        protected readonly HashSet<int> _systemsInitialized = new();
 
         /// <summary>
         /// Maps all the context IDs with the context.
@@ -193,7 +200,7 @@ namespace Bang
         /// <summary>
         /// Map of all the components index across the world.
         /// </summary>
-        internal readonly ComponentsLookup ComponentsLookup;
+        public readonly ComponentsLookup ComponentsLookup;
 
         /// <summary>
         /// Initialize the world!
@@ -258,10 +265,16 @@ namespace Bang
 
                     if (isActive)
                     {
-                        watchBuilder[watcher.Id].Systems.Add(i, (IReactiveSystem)s);
+                        if (!watchBuilder[watcher.Id].Systems.ContainsKey(i))
+                        {
+                            watchBuilder[watcher.Id].Systems.Add(i, (IReactiveSystem)s);
+                        }
                     }
 
-                    componentWatchers.Add(watcher.Id);
+                    if (!componentWatchers.Contains(watcher.Id))
+                    {
+                        componentWatchers.Add(watcher.Id);
+                    }
                 }
 
                 int? messageWatcher = null;
@@ -293,6 +306,9 @@ namespace Bang
             _typeToSystems = idToSystems.ToImmutableDictionary(sv => sv.Value.GetType(), s => s.Key);
             _pauseSystems = pauseSystems.ToImmutable();
             _playOnPauseSystems = playOnPauseSystems.ToImmutable();
+            
+            _cachedEarlyStartupSystems = new(_systems.Where(kv => kv.Value.IsActive && IdToSystem[kv.Key] is IEarlyStartupSystem)
+                .ToDictionary(kv => kv.Value.Order, kv => ((IEarlyStartupSystem)IdToSystem[kv.Key], kv.Value.ContextId)));
 
             _cachedStartupSystems = new(_systems.Where(kv => kv.Value.IsActive && IdToSystem[kv.Key] is IStartupSystem)
                 .ToDictionary(kv => kv.Value.Order, kv => ((IStartupSystem)IdToSystem[kv.Key], kv.Value.ContextId)));
@@ -305,6 +321,9 @@ namespace Bang
 
             _cachedExecuteSystems = new(_systems.Where(kv => kv.Value.IsActive && IdToSystem[kv.Key] is IUpdateSystem)
                 .ToDictionary(kv => kv.Value.Order, kv => ((IUpdateSystem)IdToSystem[kv.Key], kv.Value.ContextId)));
+            
+            _cachedLateExecuteSystems = new(_systems.Where(kv => kv.Value.IsActive && IdToSystem[kv.Key] is ILateUpdateSystem)
+                .ToDictionary(kv => kv.Value.Order, kv => ((ILateUpdateSystem)IdToSystem[kv.Key], kv.Value.ContextId)));
 
             _cachedRenderSystems = new(_systems.Where(kv => kv.Value.IsActive && IdToSystem[kv.Key] is IRenderSystem)
                 .ToDictionary(kv => kv.Value.Order, kv => ((IRenderSystem)IdToSystem[kv.Key], kv.Value.ContextId)));
@@ -314,6 +333,58 @@ namespace Bang
                 CheckSystemsRequirements(systems);
                 InitializeDiagnosticsCounters();
             }
+
+            _cachedRegisterToRemove = RegisterToRemove;
+        }
+
+        /// <summary>
+        /// 添加一个新的ISystem到世界中。
+        /// </summary>
+        /// <param name="system">要添加的系统。</param>
+        public void AddSystem(ISystem system)
+        {
+            if (system == null)
+            {
+                throw new ArgumentNullException(nameof(system));
+            }
+
+            // _systems.Add(system);
+            // _typeToSystems.Add(system.GetType(), system);
+
+            // 根据系统类型更新缓存
+            UpdateSystemCaches(system);
+        }
+
+        private void UpdateSystemCaches(ISystem system)
+        {
+            // if (system is IEarlyStartupSystem)
+            // {
+            //     _cachedEarlyStartupSystems.Add(system);
+            // }
+            // if (system is IStartupSystem)
+            // {
+            //     _cachedStartupSystems.Add(system);
+            // }
+            // if (system is IExitSystem)
+            // {
+            //     _cachedExitSystems.Add(system);
+            // }
+            // if (system is IFixedUpdateSystem)
+            // {
+            //     _cachedFixedExecuteSystems.Add(system);
+            // }
+            // if (system is IUpdateSystem)
+            // {
+            //     _cachedExecuteSystems.Add(system);
+            // }
+            // if (system is ILateUpdateSystem)
+            // {
+            //     _cachedLateExecuteSystems.Add(system);
+            // }
+            // if (system is IRenderSystem)
+            // {
+            //     _cachedRenderSystems.Add(system);
+            // }
         }
 
         /// <summary>
@@ -350,7 +421,7 @@ namespace Bang
             _entities.Add(entity.EntityId, entity);
 
             // Track end of the entity lifetime.
-            entity.OnEntityDestroyed += RegisterToRemove;
+            entity.OnEntityDestroyed += _cachedRegisterToRemove;
 
             // Filter the entity across all active contexts.
             foreach (var (_, context) in Contexts)
@@ -387,6 +458,8 @@ namespace Bang
             return id.Value;
         }
 
+        private readonly Action<int> _cachedRegisterToRemove;
+        
         /// <summary>
         /// Register that an entity must be removed in the end of the frame.
         /// </summary>
@@ -398,7 +471,7 @@ namespace Bang
         /// <summary>
         /// Destroy all the pending entities within the frame.
         /// </summary>
-        private void DestroyPendingEntities()
+        protected void DestroyPendingEntities()
         {
             if (_pendingDestroyEntities.Count == 0)
             {
@@ -417,7 +490,7 @@ namespace Bang
         /// <summary>
         /// Activate and deactivate all pending systems.
         /// </summary>
-        private void ActivateOrDeactivatePendingSystems()
+        protected void ActivateOrDeactivatePendingSystems()
         {
             if (_pendingActivateSystems.Count == 0)
             {
@@ -547,7 +620,7 @@ namespace Bang
         /// This should be used very cautiously! I hope you know what you are doing.
         /// It fetches all the deactivated entities within the world and return them.
         /// </summary>
-        public ImmutableArray<Entity> GetAllDeactivatedEntities() => [.. _deactivatedEntities.Values];
+        public ImmutableArray<Entity> GetAllDeactivatedEntities() => _deactivatedEntities.Values.ToImmutableArray();
 
         /// <summary>
         /// Total of entities in the world. This is useful for displaying debug information.
@@ -696,7 +769,15 @@ namespace Bang
             // First, let the system know that it has been activated.
             if (system is IActivateAndDeactivateListenerSystem activateSystem)
             {
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsBeforeOnSystemActivatedCall(id);
+                }
                 activateSystem.OnActivated(Contexts[context]);
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsAfterOnSystemActivatedCall(id);
+                }
             }
 
             if (system is IStartupSystem startupSystem)
@@ -712,6 +793,7 @@ namespace Bang
             }
 
             if (system is IUpdateSystem updateSystem) _cachedExecuteSystems.Add(id, (updateSystem, context));
+            if (system is ILateUpdateSystem lateUpdateSystem) _cachedLateExecuteSystems.Add(id, (lateUpdateSystem, context));
             if (system is IFixedUpdateSystem fixedUpdateSystem) _cachedFixedExecuteSystems.Add(id, (fixedUpdateSystem, context));
             if (system is IRenderSystem renderSystem) _cachedRenderSystems.Add(id, (renderSystem, context));
             if (system is IExitSystem exitSystem) _cachedExitSystems.Add(id, (exitSystem, context));
@@ -772,12 +854,21 @@ namespace Bang
             // Let the system know that it has been deactivated.
             if (system is IActivateAndDeactivateListenerSystem deactivateSystem)
             {
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsBeforeOnSystemDeactivatedCall(id);
+                }
                 int context = _systems[id].ContextId;
                 deactivateSystem.OnDeactivated(Contexts[context]);
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsAfterOnSystemDeactivatedCall(id);
+                }
             }
 
             if (system is IStartupSystem) _cachedStartupSystems.Remove(id);
             if (system is IUpdateSystem) _cachedExecuteSystems.Remove(id);
+            if (system is ILateUpdateSystem) _cachedLateExecuteSystems.Remove(id);
             if (system is IFixedUpdateSystem) _cachedFixedExecuteSystems.Remove(id);
             if (system is IRenderSystem) _cachedRenderSystems.Remove(id);
             if (system is IExitSystem) _cachedExitSystems.Remove(id);
@@ -850,6 +941,16 @@ namespace Bang
         public T GetUnique<T>() where T : struct, IComponent =>
             GetUnique<T>(ComponentsLookup.Id(typeof(T)));
 
+        public IComponent? TryGetUnique(Type t)
+        {
+            if (TryGetUniqueEntity(t) is Entity e)
+            {
+                return e.TryGetComponent(t);
+            }
+
+            return null;
+        }
+        
         /// <summary>
         /// Call <see cref="TryGetUnique{T}(int)"/> from a generator instead.
         /// </summary>
@@ -922,7 +1023,7 @@ namespace Bang
             if (!_cacheUniqueContexts.TryGetValue(index, out int contextId))
             {
                 // Get the context for acquiring the unique component.
-                contextId = GetOrCreateContext(ContextAccessorFilter.AnyOf, [index]);
+                contextId = GetOrCreateContext(ContextAccessorFilter.AnyOf, new [] { index });
 
                 _cacheUniqueContexts.Add(index, contextId);
             }
@@ -940,7 +1041,35 @@ namespace Bang
                     Debug.Assert(nonDestroyedCount == 1, "Why are there more than one entity with an unique component?");
                 }
             }
+            
+            return context.Entities.FirstOrDefault(e => !e.IsDestroyed);
+        }
 
+        public Entity? TryGetUniqueEntity(Type t)
+        {
+            var index = ComponentsLookup.Id(t);
+            if (!_cacheUniqueContexts.TryGetValue(index, out int contextId))
+            {
+                // Get the context for acquiring the unique component.
+                contextId = GetOrCreateContext(ContextAccessorFilter.AnyOf, new [] { index });
+
+                _cacheUniqueContexts.Add(index, contextId);
+            }
+
+            Context context = Contexts[contextId];
+
+            // We expect more than one entity if the remaining ones have been destroyed
+
+            if (DIAGNOSTICS_MODE)
+            {
+                int nonDestroyedCount = 0;
+                if (context.Entities.Length > 1)
+                {
+                    nonDestroyedCount = context.Entities.Where(e => !e.IsDestroyed).Count();
+                    Debug.Assert(nonDestroyedCount == 1, "Why are there more than one entity with an unique component?");
+                }
+            }
+            
             return context.Entities.FirstOrDefault(e => !e.IsDestroyed);
         }
 
@@ -1030,10 +1159,39 @@ namespace Bang
         }
 
         /// <summary>
+        /// Call before create WorldAsset Entity Instances
+        /// World::ctor() -> EarlyStart -> CreateAllEntitiesFromAsset(optional) -> Start(first Update call)
+        /// </summary>
+        public virtual void EarlyStart()
+        {
+            foreach (var (systemId, (system, contextId)) in _cachedEarlyStartupSystems)
+            {
+                // if (DIAGNOSTICS_MODE)
+                // {
+                //     _stopwatch.Reset();
+                //     _stopwatch.Start();
+                // }
+
+                system.EarlyStart(Contexts[contextId]);
+
+                // Track that this system has been started (only once).
+                _systemsInitialized.Add(systemId);
+
+                // if (DIAGNOSTICS_MODE)
+                // {
+                //     InitializeDiagnosticsCounters();
+                //
+                //     _stopwatch.Stop();
+                //     StartCounters[systemId].Update(_stopwatch.Elapsed.TotalMicroseconds, Contexts[contextId].Entities.Length);
+                // }
+            }
+        }
+
+        /// <summary>
         /// Call start on all systems.
         /// This is called before any updates and will notify any reactive systems by the end of it.
         /// </summary>
-        public void Start()
+        public virtual void Start()
         {
             foreach (var (systemId, (system, contextId)) in _cachedStartupSystems)
             {
@@ -1053,7 +1211,11 @@ namespace Bang
                     InitializeDiagnosticsCounters();
 
                     _stopwatch.Stop();
+#if NET6_0_OR_GREATER
                     StartCounters[systemId].Update(_stopwatch.Elapsed.TotalMicroseconds, Contexts[contextId].Entities.Length);
+#else
+                    StartCounters[systemId].Update(_stopwatch.Elapsed.TotalMilliseconds, Contexts[contextId].Entities.Length);
+#endif
                 }
             }
 
@@ -1080,7 +1242,7 @@ namespace Bang
         /// they were watching.
         /// Finally, it destroys all pending entities and clear all messages.
         /// </summary>
-        public void Update()
+        public virtual void Update()
         {
             foreach (var (systemId, (system, contextId)) in _cachedExecuteSystems)
             {
@@ -1098,7 +1260,11 @@ namespace Bang
                     InitializeDiagnosticsCounters();
 
                     _stopwatch.Stop();
+#if NET6_0_OR_GREATER
                     UpdateCounters[systemId].Update(_stopwatch.Elapsed.TotalMicroseconds, context.Entities.Length);
+#else
+                    UpdateCounters[systemId].Update(_stopwatch.Elapsed.TotalMilliseconds, context.Entities.Length);
+#endif
                 }
             }
 
@@ -1110,11 +1276,38 @@ namespace Bang
             ClearMessages();
         }
 
+        public virtual void LateUpdate()
+        {
+            foreach (var (systemId, (system, contextId)) in _cachedLateExecuteSystems)
+            {
+                if (DIAGNOSTICS_MODE)
+                {
+                    _stopwatch.Reset();
+                    _stopwatch.Start();
+                }
+
+                // TODO: We want to run systems which do not cross components in parallel.
+                system.LateUpdate(Contexts[contextId]);
+
+                if (DIAGNOSTICS_MODE)
+                {
+                    InitializeDiagnosticsCounters();
+
+                    _stopwatch.Stop();
+#if NET6_0_OR_GREATER
+                    LateUpdateCounters[systemId].Update(_stopwatch.Elapsed.TotalMicroseconds, Contexts[contextId].Entities.Length);
+#else
+                    LateUpdateCounters[systemId].Update(_stopwatch.Elapsed.TotalMilliseconds, Contexts[contextId].Entities.Length);
+#endif
+                }
+            }
+        }
+
         /// <summary>
         /// Calls update on all <see cref="IFixedUpdateSystem"/> systems.
         /// This will be called on fixed intervals.
         /// </summary>
-        public void FixedUpdate()
+        public virtual void FixedUpdate()
         {
             foreach (var (systemId, (system, contextId)) in _cachedFixedExecuteSystems)
             {
@@ -1132,7 +1325,11 @@ namespace Bang
                     InitializeDiagnosticsCounters();
 
                     _stopwatch.Stop();
+#if NET6_0_OR_GREATER
                     FixedUpdateCounters[systemId].Update(_stopwatch.Elapsed.TotalMicroseconds, Contexts[contextId].Entities.Length);
+#else
+                    FixedUpdateCounters[systemId].Update(_stopwatch.Elapsed.TotalMilliseconds, Contexts[contextId].Entities.Length);
+#endif
                 }
             }
         }
@@ -1142,16 +1339,16 @@ namespace Bang
         /// [System ID] => ([Notification => Entities], System)
         /// This is so we can track any duplicate entities reported for watchers of multiple components.
         /// </summary>
-        private readonly Dictionary<int, (Dictionary<WatcherNotificationKind, Dictionary<int, Entity>> Notifications, IReactiveSystem System)> _systemsToNotify = [];
+        private readonly Dictionary<int, (Dictionary<WatcherNotificationKind, Dictionary<int, Entity>> Notifications, IReactiveSystem System)> _systemsToNotify = new ();
 
         /// <summary>
         /// Same as <see cref="_systemsToNotify"/>, but ordered once the data is collected.
         /// </summary>
-        private readonly SortedList<int, (Dictionary<WatcherNotificationKind, Dictionary<int, Entity>> Notifications, IReactiveSystem System)> _orderedSystemsToNotify = [];
+        private readonly SortedList<int, (Dictionary<WatcherNotificationKind, Dictionary<int, Entity>> Notifications, IReactiveSystem System)> _orderedSystemsToNotify = new ();
 
         // This is used when DIAGNOSTICS_MODE is set to update reactive systems that were
         // not triggered.
-        private readonly HashSet<int> _reactiveTriggeredSystems = [];
+        private readonly HashSet<int> _reactiveTriggeredSystems = new ();
 
         /// <summary>
         /// Reuse the same instance for ordering the notifications per system.
@@ -1162,8 +1359,13 @@ namespace Bang
         /// Notify all reactive systems of any change that happened during the update.
         /// </summary>
         // TODO_Perf: There's tons of garbage cleanup here. We should be able to optimize a lot of it at some point.
-        private void NotifyReactiveSystems()
+        protected void NotifyReactiveSystems()
         {
+            if (DIAGNOSTICS_MODE)
+            {
+                DiagnosticsBeforeNotifyReactiveSystemsCall();
+            }
+            
             ImmutableArray<int> watchersTriggered;
 
             lock (_notificationLock)
@@ -1183,7 +1385,7 @@ namespace Bang
                     return;
                 }
 
-                watchersTriggered = [.. _watchersTriggered];
+                watchersTriggered = _watchersTriggered.ToImmutableArray();
                 _watchersTriggered = null;
             }
 
@@ -1268,28 +1470,68 @@ namespace Bang
                         continue;
                     }
 
-                    ImmutableArray<Entity> entitiesInput = [.. entities.Values];
+                    ImmutableArray<Entity> entitiesInput = entities.Values.ToImmutableArray();
 
                     switch (kind)
                     {
                         case WatcherNotificationKind.Added:
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsBeforeOnAddedCall(systemId);
+                            }
                             system.OnAdded(this, entitiesInput);
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsAfterOnAddedCall(systemId);
+                            }
                             break;
 
                         case WatcherNotificationKind.Removed:
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsBeforeOnRemovedCall(systemId);
+                            }
                             system.OnRemoved(this, entitiesInput);
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsAfterOnRemovedCall(systemId);
+                            }
                             break;
 
                         case WatcherNotificationKind.Modified:
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsBeforeOnModifiedCall(systemId);
+                            }
                             system.OnModified(this, entitiesInput);
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsAfterOnModifiedCall(systemId);
+                            }
                             break;
 
                         case WatcherNotificationKind.Enabled:
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsBeforeOnActivatedCall(systemId);
+                            }
                             system.OnActivated(this, entitiesInput);
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsAfterOnActivatedCall(systemId);
+                            }
                             break;
 
                         case WatcherNotificationKind.Disabled:
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsBeforeOnDeactivatedCall(systemId);
+                            }
                             system.OnDeactivated(this, entitiesInput);
+                            if (DIAGNOSTICS_MODE)
+                            {
+                                DiagnosticsAfterOnDeactivatedCall(systemId);
+                            }
                             break;
                     }
                 }
@@ -1300,8 +1542,13 @@ namespace Bang
 
                     _stopwatch.Stop();
 
+#if NET6_0_OR_GREATER
                     ReactiveCounters[systemId].Update(
                         _stopwatch.Elapsed.TotalMicroseconds, totalEntities: notificationsAndSystem.Notifications.Sum(n => n.Value.Count));
+#else
+                    ReactiveCounters[systemId].Update(
+                        _stopwatch.Elapsed.TotalMilliseconds, totalEntities: notificationsAndSystem.Notifications.Sum(n => n.Value.Count));
+#endif
 
                     _reactiveTriggeredSystems.Add(systemId);
                 }
@@ -1316,6 +1563,8 @@ namespace Bang
                         ReactiveCounters[systemId].Update(0, 0);
                     }
                 }
+
+                DiagnosticsAfterNotifyReactiveSystemsCall();
             }
 
             // If the reactive systems triggered other operations, trigger that again.
@@ -1328,7 +1577,7 @@ namespace Bang
         /// <summary>
         /// This will clear any messages received by the entities within a frame.
         /// </summary>
-        private void ClearMessages()
+        protected void ClearMessages()
         {
             ImmutableArray<int> entitiesTriggered;
             lock (_notificationLock)
@@ -1361,6 +1610,38 @@ namespace Bang
             }
         }
 
+        internal void NotifyComponentBeforeRemoving(int watcherId, Entity entity, int index, bool causedByDestroy)
+        {
+            var (_, systems) = _watchers[watcherId];
+            foreach ( var kv in systems ) {
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsBeforeOnBeforeRemovingCall(kv.Key);
+                }
+                kv.Value.OnBeforeRemoving(this, entity, index, causedByDestroy);
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsAfterOnBeforeRemovingCall(kv.Key);
+                }
+            }
+        }
+        
+        internal void NotifyComponentBeforeReplacing(int watcherId, Entity entity, int index)
+        {
+            var (_, systems) = _watchers[watcherId];
+            foreach ( var kv in systems ) {
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsBeforeOnBeforeModifyingCall(kv.Key);
+                }
+                kv.Value.OnBeforeModifying( this, entity, index );
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsAfterOnBeforeModifyingCall(kv.Key);
+                }
+            }
+        }
+
         /// <summary>
         /// Notify that a message has been received for a <paramref name="entity"/>.
         /// </summary>
@@ -1382,9 +1663,17 @@ namespace Bang
             OnMessage(entity);
 
             // Immediately notify all systems tied to this messager.
-            foreach (var (_, system) in _messagers[messagerId].Systems)
+            foreach (var (systemId, system) in _messagers[messagerId].Systems)
             {
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsBeforeOnMessageCall(systemId);
+                }
                 system.OnMessage(this, entity, message);
+                if (DIAGNOSTICS_MODE)
+                {
+                    DiagnosticsAfterOnMessageCall(systemId);
+                }
             }
         }
 
@@ -1402,7 +1691,26 @@ namespace Bang
             {
                 foreach (var t in attribute.Types)
                 {
-                    yield return new ComponentWatcher(this, context.Id, t);
+                    // NOTE: handle component interface
+                    if (t.IsInterface)
+                    {
+                        var interfaceId = ComponentsLookup.Id(t);
+                        foreach (var kv in ComponentsLookup.GetAllComponentIndexUnderInterface(t))
+                        {
+                            if (kv.Item2 != interfaceId)
+                            {
+                                #if !DEBUG
+                                yield return new ComponentWatcher(this, context.Id, kv.Item2);
+                                #else
+                                yield return new ComponentWatcher(this, context.Id, kv.Item2, kv.Item1);
+                                #endif
+                            }
+                        }
+                    }
+                    else
+                    {
+                        yield return new ComponentWatcher(this, context.Id, t);
+                    }
                 }
             }
         }

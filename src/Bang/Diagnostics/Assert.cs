@@ -1,4 +1,7 @@
-﻿namespace Bang.Diagnostics
+﻿using System;
+
+
+namespace Bang.Diagnostics
 {
     /// <summary>
     /// Helper class for asserting and throwing exceptions on unexpected scenarios.

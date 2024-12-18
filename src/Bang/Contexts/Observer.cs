@@ -46,5 +46,7 @@ namespace Bang.Contexts
         /// React to an entity that had some of its components removed.
         /// </summary>
         internal abstract void OnEntityComponentRemoved(Entity e, int index, bool causedByDestroy);
+        
+        internal abstract void OnEntityComponentBeforeRemove(Entity e, int index, bool causedByDestroy);
     }
 }

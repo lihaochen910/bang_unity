@@ -2,15 +2,21 @@
 using Bang.Entities;
 using Bang.Systems;
 using Bang.Util;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Linq;
+
 
 namespace Bang.Contexts
 {
     /// <summary>
     /// Context is the pool of entities accessed by each system that defined it.
     /// </summary>
+    #if DEBUG
+    [DebuggerDisplay("{_contextDebugInfo}")]
+    #endif
     public class Context : Observer, IDisposable
     {
         /// <summary>
@@ -52,11 +58,21 @@ namespace Bang.Contexts
         /// This will be fired when a component is removed from an entity present in the system.
         /// </summary>
         internal event Action<Entity, int, bool>? OnComponentRemovedForEntityInContext;
+        
+        /// <summary>
+        /// This will be fired when a component before remove from an entity present in the system.
+        /// </summary>
+        internal event Action<Entity, int, bool>? OnComponentBeforeRemovingForEntityInContext;
 
         /// <summary>
         /// This will be fired when a component is modified from an entity present in the system.
         /// </summary>
         internal event Action<Entity, int>? OnComponentModifiedForEntityInContext;
+        
+        /// <summary>
+        /// This will be fired when a component is before modify from an entity present in the system.
+        /// </summary>
+        internal event Action<Entity, int>? OnComponentBeforeModifyingForEntityInContext;
 
         /// <summary>
         /// This will be fired when an entity (which was previously disabled) gets enabled.
@@ -116,6 +132,10 @@ namespace Bang.Contexts
         /// Whether the context has any entity active.
         /// </summary>
         public bool HasAnyEntity => _entities.Count > 0;
+        
+        #if DEBUG
+        private readonly string _contextDebugInfo;
+        #endif
 
         internal Context(World world, ISystem system) : base(world)
         {
@@ -124,6 +144,11 @@ namespace Bang.Contexts
             _componentsOperationKind = CreateAccessorKindComponents(filters);
 
             _id = CalculateId();
+            // InitDelegateCache();
+            
+            #if DEBUG
+            _contextDebugInfo = $"c_{system.GetType().Name}";
+            #endif
         }
 
         /// <summary>
@@ -136,7 +161,36 @@ namespace Bang.Contexts
             _componentsOperationKind = ImmutableDictionary<ContextAccessorKind, ImmutableHashSet<int>>.Empty;
 
             _id = CalculateId();
+            // InitDelegateCache();
         }
+
+        // private Action<Entity, int> _cachedOnEntityComponentAdded;
+        // private Action<Entity, int, bool> _cachedOnEntityComponentRemoved;
+        // private Action<Entity, int> _cachedOnComponentAddedForEntityInContext;
+        // private Action<Entity, int, bool> _cachedOnComponentBeforeRemovingForEntityInContext;
+        // private Action<Entity, int, bool> _cachedOnComponentRemovedForEntityInContext;
+        // private Action<Entity, int> _cachedOnComponentBeforeModifyingForEntityInContext;
+        // private Action<Entity, int> _cachedOnComponentModifiedForEntityInContext;
+        // private Action<Entity, int, IMessage> _cachedOnMessageSentForEntityInContext;
+        // private Action<Entity> _cachedOnEntityActivated;
+        // private Action<Entity> _cachedOnEntityDeactivated;
+        //
+        // private void InitDelegateCache()
+        // {
+        //     _cachedOnEntityComponentAdded = OnEntityComponentAdded;
+        //     _cachedOnEntityComponentRemoved = OnEntityComponentRemoved;
+        //
+        //     _cachedOnComponentBeforeRemovingForEntityInContext = OnComponentBeforeRemovingForEntityInContext;
+        //     _cachedOnComponentRemovedForEntityInContext = OnComponentRemovedForEntityInContext;
+        //     _cachedOnComponentBeforeModifyingForEntityInContext = OnComponentBeforeModifyingForEntityInContext;
+        //     _cachedOnComponentModifiedForEntityInContext = OnComponentModifiedForEntityInContext;
+        //     
+        //     _cachedOnMessageSentForEntityInContext = OnMessageSentForEntityInContext;
+        //     _cachedOnEntityActivated = OnEntityActivated;
+        //     _cachedOnEntityDeactivated = OnEntityDeactivated;
+        //     
+        //     _cachedOnComponentAddedForEntityInContext = OnComponentAddedForEntityInContext;
+        // }
 
         /// <summary>
         /// This gets the context unique identifier.
@@ -185,6 +239,13 @@ namespace Bang.Contexts
 
         private ImmutableArray<(FilterAttribute, ImmutableArray<int>)> CreateFilterList(ISystem system)
         {
+            Func<Type, ImmutableArray<int>> lookup = t =>
+            {
+                if (!t.IsInterface)
+                    return new [] { Lookup.Id(t) }.ToImmutableArray();
+                return World.ComponentsLookup.GetAllComponentIndexUnderInterface(t).Select( kv => kv.Item2 ).ToImmutableArray();
+            };
+
             var builder = ImmutableArray.CreateBuilder<(FilterAttribute, ImmutableArray<int>)>();
 
             // First, grab all the filters of the system.
@@ -194,7 +255,7 @@ namespace Bang.Contexts
             // Now, for each filter, populate our set of files.
             foreach (var filter in filters)
             {
-                builder.Add((filter, filter.Types.Select(Lookup.Id).ToImmutableArray()));
+                builder.Add((filter, filter.Types.SelectMany(t => lookup(t)).ToImmutableArray()));
             }
 
             return builder.ToImmutableArray();
@@ -293,17 +354,31 @@ namespace Bang.Contexts
 
             entity.OnComponentAdded += OnEntityComponentAdded;
             entity.OnComponentRemoved += OnEntityComponentRemoved;
-
+            // entity.OnComponentAdded += _cachedOnEntityComponentAdded;
+            // entity.OnComponentRemoved += _cachedOnEntityComponentRemoved;
+            
             if (DoesEntityMatch(entity))
             {
+                entity.OnComponentBeforeRemoving += OnComponentBeforeRemovingForEntityInContext;
                 entity.OnComponentRemoved += OnComponentRemovedForEntityInContext;
+                entity.OnComponentBeforeModifying += OnComponentBeforeModifyingForEntityInContext;
                 entity.OnComponentModified += OnComponentModifiedForEntityInContext;
-
+                
                 entity.OnMessage += OnMessageSentForEntityInContext;
-
+                
                 entity.OnEntityActivated += OnEntityActivated;
                 entity.OnEntityDeactivated += OnEntityDeactivated;
 
+                // entity.OnComponentBeforeRemoving += _cachedOnComponentBeforeRemovingForEntityInContext;
+                // entity.OnComponentRemoved += _cachedOnComponentRemovedForEntityInContext;
+                // entity.OnComponentBeforeModifying += _cachedOnComponentBeforeModifyingForEntityInContext;
+                // entity.OnComponentModified += _cachedOnComponentModifiedForEntityInContext;
+                //
+                // entity.OnMessage += _cachedOnMessageSentForEntityInContext;
+                //
+                // entity.OnEntityActivated += _cachedOnEntityActivated;
+                // entity.OnEntityDeactivated += _cachedOnEntityDeactivated;
+                
                 if (OnComponentAddedForEntityInContext is not null)
                 {
                     if (!entity.IsDeactivated)
@@ -317,6 +392,7 @@ namespace Bang.Contexts
                     }
 
                     entity.OnComponentAdded += OnComponentAddedForEntityInContext;
+                    // entity.OnComponentAdded += _cachedOnComponentAddedForEntityInContext;
                 }
 
                 if (!entity.IsDeactivated)
@@ -402,6 +478,11 @@ namespace Bang.Contexts
             OnEntityModified(e, index);
         }
 
+        internal override void OnEntityComponentBeforeRemove(Entity e, int index, bool causedByDestroy)
+        {
+            
+        }
+
         internal void OnEntityActivated(Entity e)
         {
             if (!_entities.ContainsKey(e.EntityId))
@@ -467,13 +548,25 @@ namespace Bang.Contexts
             // Add any watchers from now on.
             e.OnComponentAdded += OnComponentAddedForEntityInContext;
             e.OnComponentRemoved += OnComponentRemovedForEntityInContext;
+            e.OnComponentBeforeRemoving += OnComponentBeforeRemovingForEntityInContext;
             e.OnComponentModified += OnComponentModifiedForEntityInContext;
-
+            e.OnComponentBeforeModifying += OnComponentBeforeModifyingForEntityInContext;
+            
             e.OnMessage += OnMessageSentForEntityInContext;
-
+            
             e.OnEntityActivated += OnEntityActivated;
             e.OnEntityDeactivated += OnEntityDeactivated;
-
+            // e.OnComponentAdded += _cachedOnComponentAddedForEntityInContext;
+            // e.OnComponentRemoved += _cachedOnComponentRemovedForEntityInContext;
+            // e.OnComponentBeforeRemoving += _cachedOnComponentBeforeRemovingForEntityInContext;
+            // e.OnComponentModified += _cachedOnComponentModifiedForEntityInContext;
+            // e.OnComponentBeforeModifying += _cachedOnComponentBeforeModifyingForEntityInContext;
+            //
+            // e.OnMessage += _cachedOnMessageSentForEntityInContext;
+            //
+            // e.OnEntityActivated += _cachedOnEntityActivated;
+            // e.OnEntityDeactivated += _cachedOnEntityDeactivated;
+            
             if (!e.IsDeactivated)
             {
                 // Notify immediately of the new added component.
@@ -499,13 +592,26 @@ namespace Bang.Contexts
             // Remove any watchers.
             e.OnComponentAdded -= OnComponentAddedForEntityInContext;
             e.OnComponentRemoved -= OnComponentRemovedForEntityInContext;
+            e.OnComponentBeforeRemoving -= OnComponentBeforeRemovingForEntityInContext;
             e.OnComponentModified -= OnComponentModifiedForEntityInContext;
-
+            e.OnComponentBeforeModifying -= OnComponentBeforeModifyingForEntityInContext;
+            
             e.OnMessage -= OnMessageSentForEntityInContext;
-
+            
             e.OnEntityActivated -= OnEntityActivated;
             e.OnEntityDeactivated -= OnEntityDeactivated;
-
+            
+            // e.OnComponentAdded -= _cachedOnComponentAddedForEntityInContext;
+            // e.OnComponentRemoved -= _cachedOnComponentRemovedForEntityInContext;
+            // e.OnComponentBeforeRemoving -= _cachedOnComponentBeforeRemovingForEntityInContext;
+            // e.OnComponentModified -= _cachedOnComponentModifiedForEntityInContext;
+            // e.OnComponentBeforeModifying -= _cachedOnComponentBeforeModifyingForEntityInContext;
+            //
+            // e.OnMessage -= _cachedOnMessageSentForEntityInContext;
+            //
+            // e.OnEntityActivated -= _cachedOnEntityActivated;
+            // e.OnEntityDeactivated -= _cachedOnEntityDeactivated;
+            
             if (!e.IsDeactivated)
             {
                 // Notify immediately of the removed component.
@@ -533,6 +639,17 @@ namespace Bang.Contexts
             OnActivateEntityInContext = null;
             OnDeactivateEntityInContext = null;
             OnMessageSentForEntityInContext = null;
+
+            // _cachedOnEntityComponentAdded = null;
+            // _cachedOnEntityComponentRemoved = null;
+            // _cachedOnComponentAddedForEntityInContext = null;
+            // _cachedOnComponentBeforeRemovingForEntityInContext = null;
+            // _cachedOnComponentRemovedForEntityInContext = null;
+            // _cachedOnComponentBeforeModifyingForEntityInContext = null;
+            // _cachedOnComponentModifiedForEntityInContext = null;
+            // _cachedOnMessageSentForEntityInContext = null;
+            // _cachedOnEntityActivated = null;
+            // _cachedOnEntityDeactivated = null;
 
             _entities.Clear();
         }

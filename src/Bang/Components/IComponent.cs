@@ -1,4 +1,7 @@
-﻿namespace Bang.Components
+﻿using System;
+
+
+namespace Bang.Components
 {
     /// <summary>
     /// A set of components will define an entity. This can be any sort of game abstraction.

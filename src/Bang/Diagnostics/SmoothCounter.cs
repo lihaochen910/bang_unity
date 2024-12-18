@@ -1,4 +1,7 @@
-﻿namespace Bang.Diagnostics
+﻿using System;
+
+
+namespace Bang.Diagnostics
 {
     /// <summary>
     /// Class used to smooth the counter of performance ticks.

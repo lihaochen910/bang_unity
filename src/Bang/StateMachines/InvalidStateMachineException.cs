@@ -1,6 +1,12 @@
-namespace Bang.StateMachines;
+using System;
 
-public class InvalidStateMachineException : InvalidOperationException
+
+namespace Bang.StateMachines
 {
-    public InvalidStateMachineException(string message) : base(message) { }
+
+    public class InvalidStateMachineException : InvalidOperationException
+    {
+        public InvalidStateMachineException(string message) : base(message) { }
+    }
+    
 }

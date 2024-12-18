@@ -1,4 +1,7 @@
-﻿namespace Bang.Components
+﻿using System;
+
+
+namespace Bang.Components
 {
     /// <summary>
     /// Marks a component that generates another component in runtime.

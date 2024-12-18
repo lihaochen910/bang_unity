@@ -1,4 +1,6 @@
 ﻿using Bang.Components;
+using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
 
@@ -10,6 +12,7 @@ namespace Bang.Entities
         /// This will be fired when a message gets sent to the entity.
         /// </summary>
         public event Action<Entity, int, IMessage>? OnMessage;
+        // public ImmutableArray<Action<Entity, int, IMessage>> OnMessage = ImmutableArray< Action< Entity , int, IMessage > >.Empty;
 
         /// <summary>
         /// Track message components. This will be added within an update.
@@ -64,6 +67,9 @@ namespace Bang.Entities
             // Notify messagers. We only use the message to notify all the messagers,
             // but we will not save any of its data afterwards.
             OnMessage?.Invoke(this, index, message);
+            // foreach ( var action in OnMessage ) {
+            //     action?.Invoke(this, index, message);
+            // }
 
             // Notify world that a message has been sent for this entity.
             _world.OnMessage(this);
@@ -88,6 +94,9 @@ namespace Bang.Entities
         {
             bool removed = _messages.Remove(index);
             OnComponentRemoved?.Invoke(this, index, false /* causedByDestroy */);
+            // foreach ( var action in OnComponentRemoved ) {
+            //     action?.Invoke(this, index, false /* causedByDestroy */);
+            // }
 
             return removed;
         }

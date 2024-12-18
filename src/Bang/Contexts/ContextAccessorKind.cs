@@ -1,4 +1,7 @@
-﻿namespace Bang.Contexts
+﻿using System;
+
+
+namespace Bang.Contexts
 {
     /// <summary>
     /// Context accessor kind for a system.

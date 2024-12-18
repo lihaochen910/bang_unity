@@ -1,4 +1,7 @@
-﻿namespace Bang.Systems
+﻿using System;
+
+
+namespace Bang.Systems
 {
     /// <summary>
     /// Indicates that a system will be included when the world is paused.

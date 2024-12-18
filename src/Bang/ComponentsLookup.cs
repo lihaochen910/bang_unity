@@ -1,4 +1,6 @@
-﻿using Bang.Components;
+﻿using System;
+using System.Collections.Generic;
+using Bang.Components;
 using Bang.Entities;
 using Bang.Interactions;
 using Bang.StateMachines;
@@ -49,7 +51,30 @@ namespace Bang
         private readonly HashSet<int> _untrackedRelativeComponents = new();
 
         private int? _nextUntrackedIndex;
-
+        
+        #if DEBUG
+        private Lazy<ImmutableDictionary<int, Type>> _componentsIndexForReverseLookup;
+        private Lazy<ImmutableDictionary<int, Type>> _messagesIndexForReverseLookup;
+        
+        private ImmutableDictionary<int, Type> CreateReverseLookupComponentsIndex() {
+            var dict = new Dictionary<int, Type>();
+            foreach (var keyValuePair in ComponentsIndex)
+            {
+                dict[keyValuePair.Value] = keyValuePair.Key;
+            }
+            return dict.ToImmutableDictionary();
+        }
+        
+        private ImmutableDictionary<int, Type> CreateReverseLookupMessagesIndex() {
+            var dict = new Dictionary<int, Type>();
+            foreach (var keyValuePair in MessagesIndex)
+            {
+                dict[keyValuePair.Value] = keyValuePair.Key;
+            }
+            return dict.ToImmutableDictionary();
+        }
+        #endif
+        
         /// <summary>
         /// Get the id for <paramref name="t"/> component type.
         /// </summary>
@@ -78,6 +103,43 @@ namespace Bang
 
             return AddUntrackedIndexForComponentOrMessage(t);
         }
+        
+        #if DEBUG
+        public Type IdType(int componentId)
+        {
+            var retry = false;
+Retry:
+            if (_componentsIndexForReverseLookup is null)
+            {
+                _componentsIndexForReverseLookup = new Lazy<ImmutableDictionary<int, Type>>(CreateReverseLookupComponentsIndex);
+            }
+            
+            if (_messagesIndexForReverseLookup is null)
+            {
+                _messagesIndexForReverseLookup = new Lazy<ImmutableDictionary<int, Type>>(CreateReverseLookupMessagesIndex);
+            }
+            
+            if (_messagesIndexForReverseLookup.Value.TryGetValue(componentId, out var t))
+            {
+                return t;
+            }
+
+            if (_componentsIndexForReverseLookup.Value.TryGetValue(componentId, out t))
+            {
+                return t;
+            }
+
+            if (!retry)
+            {
+                _componentsIndexForReverseLookup = null;
+                _messagesIndexForReverseLookup = null;
+                retry = true;
+                goto Retry;
+            }
+
+            return null;
+        }
+        #endif
 
         /// <summary>
         /// Returns whether a <paramref name="id"/> is relative to its parent.
@@ -124,6 +186,17 @@ namespace Bang
             }
 
             return id.Value;
+        }
+
+        public IEnumerable<(Type, int)> GetAllComponentIndexUnderInterface(Type t)
+        {
+            foreach (var kv in ComponentsIndex)
+            {
+                if (t.IsAssignableFrom(kv.Key) && t != kv.Key)
+                {
+                    yield return (kv.Key, kv.Value);
+                }
+            }
         }
     }
 }

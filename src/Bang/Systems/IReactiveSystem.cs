@@ -1,4 +1,5 @@
-﻿using Bang.Entities;
+﻿using Bang.Components;
+using Bang.Entities;
 using System.Collections.Immutable;
 
 namespace Bang.Systems
@@ -42,5 +43,15 @@ namespace Bang.Systems
         /// previously disabled.
         /// </summary>
         public virtual void OnDeactivated(World world, ImmutableArray<Entity> entities) { }
+        
+        /// <summary>
+        /// [Optional]
+        /// </summary>
+        public virtual void OnBeforeRemoving(World world, Entity entity, int index, bool causedByDestroy) { }
+        
+        /// <summary>
+        /// [Optional]
+        /// </summary>
+        public virtual void OnBeforeModifying(World world, Entity entity, int index) { }
     }
 }

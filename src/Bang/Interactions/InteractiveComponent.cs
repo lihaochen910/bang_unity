@@ -5,15 +5,17 @@ namespace Bang.Interactions
     /// <summary>
     /// Implements an interaction component which will be passed on to the entity.
     /// </summary>
-    public struct InteractiveComponent<T> : IInteractiveComponent where T : struct, IInteraction
+    public readonly struct InteractiveComponent<T> : IInteractiveComponent where T : struct, IInteraction
     {
         [Serialize]
         private readonly T _interaction;
 
+#if NET6_0_OR_GREATER
         /// <summary>
         /// Default constructor, initializes a brand new interaction.
         /// </summary>
         public InteractiveComponent() => _interaction = new();
+#endif
 
         /// <summary>
         /// Creates a new <see cref="InteractiveComponent{T}"/>.

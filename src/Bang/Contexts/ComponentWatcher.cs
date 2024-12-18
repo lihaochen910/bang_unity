@@ -1,12 +1,19 @@
 ﻿using Bang.Entities;
 using Bang.Util;
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+
 
 namespace Bang.Contexts
 {
     /// <summary>
     /// A context may have a collection of watchers.
     /// </summary>
+    #if DEBUG
+    [DebuggerDisplay("{_targetComponentDebugInfo}")]
+    #endif
     internal class ComponentWatcher
     {
         public readonly World World;
@@ -16,6 +23,10 @@ namespace Bang.Contexts
         private readonly int _targetComponent;
 
         private readonly object _lock = new();
+        
+        #if DEBUG
+        private readonly string _targetComponentDebugInfo;
+        #endif
 
         /// <summary>
         /// Tracks the total of entities to notify.
@@ -87,13 +98,35 @@ namespace Bang.Contexts
 
             _targetComponent = world.ComponentsLookup.Id(targetComponent);
             Id = HashExtensions.GetHashCode(contextId, _targetComponent);
+            
+            #if DEBUG
+            _targetComponentDebugInfo = $"cw_{targetComponent.Name}";
+            #endif
+        }
+        
+        #if !DEBUG
+        internal ComponentWatcher(World world, int contextId, int targetComponentId)
+        #else
+        internal ComponentWatcher(World world, int contextId, int targetComponentId, Type targetComponent)
+        #endif
+        {
+            World = world;
+
+            _targetComponent = targetComponentId;
+            Id = HashExtensions.GetHashCode(contextId, _targetComponent);
+            
+            #if DEBUG
+            _targetComponentDebugInfo = $"cw_{targetComponent.Name}";
+            #endif
         }
 
         internal void SubscribeToContext(Context context)
         {
             context.OnComponentAddedForEntityInContext += OnEntityComponentAdded;
             context.OnComponentRemovedForEntityInContext += OnEntityComponentRemoved;
+            context.OnComponentBeforeRemovingForEntityInContext += OnEntityComponentBeforeRemoving;
             context.OnComponentModifiedForEntityInContext += OnEntityComponentReplaced;
+            context.OnComponentBeforeModifyingForEntityInContext += OnEntityComponentBeforeReplacing;
 
             context.OnActivateEntityInContext += OnEntityActivated;
             context.OnDeactivateEntityInContext += OnEntityDeactivated;
@@ -101,6 +134,10 @@ namespace Bang.Contexts
 
         private void OnEntityComponentAdded(Entity e, int index)
         {
+            // #if DEBUG
+            // var targetComponentType = e.World.ComponentsLookup.IdType(_targetComponent);
+            // var inComponentType = e.World.ComponentsLookup.IdType(index);
+            // #endif
             if (index != _targetComponent)
             {
                 return;
@@ -134,6 +171,22 @@ namespace Bang.Contexts
             QueueEntityNotification(WatcherNotificationKind.Removed, e);
         }
 
+        private void OnEntityComponentBeforeRemoving(Entity e, int index, bool causedByDestroy)
+        {
+            if (index != _targetComponent)
+            {
+                return;
+            }
+
+            if (e.IsDestroyed)
+            {
+                // entity has already been notified prior to this call.
+                return;
+            }
+            
+            World.NotifyComponentBeforeRemoving(Id, e, index, causedByDestroy);
+        }
+
         private void OnEntityComponentReplaced(Entity e, int index)
         {
             if (index != _targetComponent)
@@ -142,6 +195,16 @@ namespace Bang.Contexts
             }
 
             QueueEntityNotification(WatcherNotificationKind.Modified, e);
+        }
+        
+        private void OnEntityComponentBeforeReplacing(Entity e, int index)
+        {
+            if (index != _targetComponent)
+            {
+                return;
+            }
+            
+            World.NotifyComponentBeforeReplacing(Id, e, index);
         }
 
         private void OnEntityActivated(Entity e)
